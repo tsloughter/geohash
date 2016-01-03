@@ -1,3 +1,5 @@
+_build
+c_src/geohash.d
 .eunit
 etc/app.config
 deps

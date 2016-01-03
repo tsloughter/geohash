@@ -14,21 +14,20 @@
 
 %% @author Tom Burdick <thomas.burdick@gmail.com>
 %% @copyright 2012 Treetop Software LLC
-%% @doc GeoHash functions for Erlang with C implementations for core 
+%% @doc GeoHash functions for Erlang with C implementations for core
 %% functionality
 %% @end
 
 -module(geohash).
 
--export([
-    decode/1,
-    decode_bbox/1,
-    encode/3,
-    neighbor/2,
-    neighbors/1,
-    expand/1,
-    nearby/3
-]).
+-export([decode/1,
+         decode_bbox/1,
+         encode/3,
+         entropy_encode/2,
+         neighbor/2,
+         neighbors/1,
+         expand/1,
+         nearby/3]).
 
 -on_load(init/0).
 
@@ -42,9 +41,14 @@ decode(_GeoHash) ->
 decode_bbox(_GeoHash) ->
     exit(geohash_nif_not_loaded).
 
-%% @doc Encode latitude and longitude into a geohash 
+%% @doc Encode latitude and longitude into a geohash
 -spec encode(float(), float(), pos_integer()) -> binary().
 encode(_Latitude, _Longitude, _Precision) ->
+    exit(geohash_nif_not_loaded).
+
+%% @doc
+-spec entropy_encode([{float(), float()}], pos_integer()) -> ok.
+entropy_encode(_Points, _Precision) ->
     exit(geohash_nif_not_loaded).
 
 %% @doc Calculate a neighoring geohash
@@ -109,7 +113,7 @@ nearby_precision(Lat, Lon, Rad) ->
 %% distance on the earth.
 %% @end
 -spec earth_bounding_box(float(), float(), float()) ->
-    {float(), float(), float(), float()}. 
+    {float(), float(), float(), float()}.
 earth_bounding_box(Lat, Lon, Dist)  ->
     MIN_LAT = radians(-90),
     MAX_LAT = radians(90),
@@ -161,7 +165,7 @@ radians(Degrees) ->
 degrees(Radians) ->
     (180.0/math:pi())*Radians.
 
-%% @doc Determine the number of bits required (slices) to encompass a 
+%% @doc Determine the number of bits required (slices) to encompass a
 %% latitude and longitude range.
 geohash_bits(_, _, 0) ->
     0;
@@ -180,4 +184,3 @@ delta_lat(Bits) ->
 %% @doc Give the delta for a number of bits used in geohashing longitude
 delta_lon(Bits) ->
     360.0 / math:pow(2, (Bits + 1) / 2).
-

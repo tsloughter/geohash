@@ -1,7 +1,7 @@
-/* 
+/*
  * Copyright (c) 2008 David Troy, Roundhouse Technologies LLC
  * Copyright (c) 2012 Tom Burdick, Treetop Software LLC
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
  * 'Software'), to deal in the Software without restriction, including
@@ -9,10 +9,10 @@
  * distribute, sublicense, and/or sell copies of the Software, and to
  * permit persons to whom the Software is furnished to do so, subject to
  * the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be
  * included in all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND,
  * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
  * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
@@ -25,6 +25,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdlib.h>
+#include <math.h>
 
 #include "erl_nif_compat.h"
 
@@ -131,7 +133,7 @@ geohash_encode(double latitude, double longitude, int precision, char *geohash)
 /**
  * Calculate a neighbor to a geohash of the same precision
  */
-void 
+void
 geohash_neighbor(char *str, int dir, int hashlen)
 {
     /* Right, Left, Top, Bottom */
@@ -180,7 +182,7 @@ static inline ERL_NIF_TERM
 make_ok(ErlNifEnv* env, ERL_NIF_TERM mesg)
 {
     ERL_NIF_TERM ok = make_atom(env, "ok");
-    return enif_make_tuple2(env, ok, mesg);   
+    return enif_make_tuple2(env, ok, mesg);
 }
 
 /**
@@ -288,6 +290,179 @@ erl_geohash_encode(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
     return make_ok(env, enif_make_binary(env, &bin));
 }
 
+double to_dec(char *gh) {
+  char *bins[] = {"00000", "00001", "00010", "00011", "00100", "00101", "00110",
+                  "00111", "01000", "01001", "01010", "01011", "01100", "01101",
+                  "01110", "01111", "10000", "10001", "10010", "10011", "10100",
+                  "10101", "10110", "10111", "11000", "11001", "11010", "11011",
+                  "11100", "11101", "11110", "11111"};
+  double bit = 1.0;
+  double result = 0;
+  int i, l = 0, k = 0;
+  char c;
+
+
+  while (k < 10) {
+    i = 0;
+    c = gh[k++];
+
+    while(i < 32) {
+      if (BASE32[i] == c) {
+        for(l=0;l<5; l++) {
+          result += (bins[i][l] - 48.0) * (1.0 / pow(2.0, bit));
+          bit++;
+        }
+        break;
+      }
+
+      i++;
+    }
+  }
+
+  return result;
+}
+
+typedef struct {
+  char* hash;
+  float weight;
+} hash_weight;
+
+int find_idx(char* term, size_t n, hash_weight weights[n]) {
+  int i;
+
+  for(i=0; i < n; i++) {
+    if (weights[i].hash == NULL || strcmp(term, weights[i].hash) == 0) {
+      break;
+    }
+  }
+
+  return i;
+}
+
+void interpolate(int len, double xs[len], double ys[len], int new_len, double xvals[new_len], double yvals[new_len]) {
+  int i;
+  int l=0;
+  double x, x0, x1, y, y0, y1;
+
+  for(i=0; i<new_len; i++) {
+    if (xvals[i] > xs[l])
+      break;
+    yvals[i] = -INFINITY;
+  }
+
+  for(; i<new_len; i++) {
+    if (xvals[i] >= xs[l+1]) {
+      for(; l<len; l++) {
+        if (xs[l+1] >= xvals[i])
+          break;
+      }
+    }
+
+    x = xvals[i];
+    x0 = xs[l];
+    x1 = xs[l+1];
+    y0 = ys[l];
+    y1 = ys[l+1];
+    y = (y0 + (y1 - y0) * ((x - x0) / (x1 - x0)));
+    yvals[i] = y;
+  }
+}
+
+/*
+ * Erlang Wrapper for geohash_encode
+ */
+ERL_NIF_TERM
+erl_entropy_geohash_encode(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+  unsigned list_length;
+  ERL_NIF_TERM head, tail;
+  int precision;
+  int idx = -1;
+  unsigned int len;
+  int i;
+
+  enif_get_list_length(env, argv[0], &list_length);
+
+  if(!enif_get_int(env, argv[1], &precision)) {
+    return enif_make_badarg(env);
+  }
+
+  if(precision >= GEOHASH_MAX || precision < 1) {
+    return make_error(env, "precision_range");
+  }
+
+  tail = argv[0];
+  if (!enif_get_list_length(env, tail, &len)) {
+      return enif_make_badarg(env);
+  }
+
+  hash_weight weights[len];
+  for(i=0;i<len;i++) {
+    weights[i].hash=NULL;
+    weights[i].weight=0;
+  }
+
+  while(enif_get_list_cell(env, tail, &head, &tail) != 0) {
+    int arity;
+    const ERL_NIF_TERM* array;
+
+    if (!enif_get_tuple(env, head, &arity, &array)) {
+      return enif_make_badarg(env);
+    }
+
+    double point[arity];
+    for(int i=0;i<arity;i++) {
+      if (!enif_get_double(env, array[i], &point[i])) {
+        return enif_make_badarg(env);
+      }
+    }
+
+    char *geohash = (char *) malloc(sizeof(char) * precision);
+    geohash_encode(point[0], point[1], precision, geohash);
+    idx = find_idx(geohash, len, weights);
+    weights[idx].hash = geohash;
+    weights[idx].weight += 1;
+  }
+
+  float sum = 0.0;
+  for(i=0; i<len; i++) {
+    sum += weights[i].weight;
+    weights[i].weight = sum / len;
+  }
+
+  double range = pow(2, 10);
+  double xvals[(int) range];
+  double yvals[(int) range];
+  for(i=0; i<range; i++) {
+    xvals[i] = (i+1) / range;
+    yvals[i] = 1;
+  }
+
+  double xs[len], ys[len];
+  for(i=0; i<len; i++) {
+    xs[i] = weights[i].weight;
+    ys[i] = to_dec(weights[i].hash);
+  }
+
+  interpolate(len, xs, ys, (int) range, xvals, yvals);
+
+  double new_xs[len];
+  interpolate((int) range, yvals, xvals, len, ys, new_xs);
+
+  i = 0;
+  while(isnan(new_xs[i])) {
+    new_xs[i] = 0;
+  }
+
+  ERL_NIF_TERM list = enif_make_list(env, 0);
+  for(i=0;i<len;i++) {
+    list = enif_make_list_cell(env, enif_make_tuple2(env, enif_make_double(env, ys[i]), enif_make_double(env, new_xs[i])), list);
+  }
+
+  return make_ok(env, list);
+}
+
+
 /**
  * Erlang Wrapper for geohash_neighbor
  */
@@ -346,7 +521,7 @@ erl_geohash_neighbor(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
     }
 
     geohash_neighbor(geohash, dir_val, hash_len);
-    
+
     memcpy(output.data, geohash, hash_len);
 
     return make_ok(env, enif_make_binary(env, &output));
@@ -376,6 +551,7 @@ on_upgrade(ErlNifEnv* env, void** priv, void** old_priv, ERL_NIF_TERM info)
 
 static ErlNifFunc nif_functions[] = {
     {"encode", 3, erl_geohash_encode},
+    {"entropy_encode", 2, erl_entropy_geohash_encode},
     {"decode", 1, erl_geohash_decode},
     {"decode_bbox", 1, erl_geohash_decode_bbox},
     {"neighbor", 2, erl_geohash_neighbor}
