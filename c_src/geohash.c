@@ -38,6 +38,11 @@
        __typeof__ (b) _b = (b); \
      _a < _b ? _a : _b; })
 
+#define max(a,b) \
+   ({ __typeof__ (a) _a = (a); \
+       __typeof__ (b) _b = (b); \
+     _a > _b ? _a : _b; })
+
 /**
  * Decode the bounding box represented by a geohash
  */
@@ -380,6 +385,7 @@ erl_entropy_geohash_encode(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
   int idx = -1;
   unsigned int len;
   int i;
+  int unique = 0;
 
   enif_get_list_length(env, argv[0], &list_length);
 
@@ -393,7 +399,7 @@ erl_entropy_geohash_encode(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 
   tail = argv[0];
   if (!enif_get_list_length(env, tail, &len)) {
-      return enif_make_badarg(env);
+    return enif_make_badarg(env);
   }
 
   hash_weight weights[len];
@@ -422,12 +428,25 @@ erl_entropy_geohash_encode(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
     idx = find_idx(geohash, len, weights);
     weights[idx].hash = geohash;
     weights[idx].weight += 1;
+
+    unique = max(unique, idx);
   }
 
+  // unique will be the largest index, add 1 to make it equal to the # of unique hashes
+  unique++;
+
+  float tot_sum = 0.0;
   float sum = 0.0;
-  for(i=0; i<len; i++) {
+
+  // sum all the weights
+  for(i=0; i<unique; i++) {
+    tot_sum += weights[i].weight;
+  }
+
+  // cumsum(weight[i]) / sum(weights)
+  for(i=0; i<unique; i++) {
     sum += weights[i].weight;
-    weights[i].weight = sum / len;
+    weights[i].weight = sum / tot_sum;
   }
 
   double range = pow(2, 10);
@@ -438,24 +457,25 @@ erl_entropy_geohash_encode(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
     yvals[i] = 1;
   }
 
-  double xs[len], ys[len];
-  for(i=0; i<len; i++) {
+  double xs[unique], ys[unique];
+  for(i=0; i<unique; i++) {
     xs[i] = weights[i].weight;
     ys[i] = to_dec(weights[i].hash);
   }
 
-  interpolate(len, xs, ys, (int) range, xvals, yvals);
+  interpolate(unique, xs, ys, (int) range, xvals, yvals);
 
-  double new_xs[len];
-  interpolate((int) range, yvals, xvals, len, ys, new_xs);
+  double new_xs[unique];
+  interpolate((int) range, yvals, xvals, unique, ys, new_xs);
 
   i = 0;
   while(isnan(new_xs[i])) {
     new_xs[i] = 0;
+    i++;
   }
 
   ERL_NIF_TERM list = enif_make_list(env, 0);
-  for(i=0;i<len;i++) {
+  for(i=0;i<unique;i++) {
     list = enif_make_list_cell(env, enif_make_tuple2(env, enif_make_double(env, ys[i]), enif_make_double(env, new_xs[i])), list);
   }
 
